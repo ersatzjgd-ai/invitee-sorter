@@ -1,72 +1,96 @@
 import streamlit as st
 import pandas as pd
-import easyocr
-from PIL import Image
+import cv2
+import pytesseract
 import numpy as np
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+from rapidfuzz import process, fuzz
 
-# Page Config
-st.set_page_config(page_title="Invitee Sorter", layout="centered")
-st.title("✉️ Invitee to POC Sorter")
+st.set_page_config(page_title="Letter Sorter", layout="wide")
+st.title("📇 Fast POC Letter Sorter")
 
-# Initialize OCR reader (downloads model on first run)
-@st.cache_resource
-def load_ocr():
-    return easyocr.Reader(['en'])
+# 1. Load the Excel Data
+# Replace 'invitees.xlsx' with your actual file name
+@st.cache_data
+def load_data():
+    try:
+        # Assuming the columns are exactly "Name" and "Main POC Name"
+        df = pd.read_excel("invitees.xlsx")
+        # Drop rows with missing names to avoid matching errors
+        df = df.dropna(subset=['Name']) 
+        return df
+    except Exception as e:
+        st.error(f"Error loading Excel file: {e}")
+        return pd.DataFrame()
 
-reader = load_ocr()
+df = load_data()
 
-# 1. Upload the Excel Database
-uploaded_file = st.sidebar.file_uploader("Upload POC Excel Sheet", type=["xlsx", "csv"])
+if df.empty:
+    st.warning("Please upload or ensure 'invitees.xlsx' is in the directory.")
+    st.stop()
 
-if uploaded_file:
-    # Load data
-    df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
-    
-    # Clean data: Ensure columns exist and remove extra spaces
-    df.columns = df.columns.str.strip()
-    if 'Name' in df.columns and 'Main POC Name' in df.columns:
-        df['Name_Clean'] = df['Name'].astype(str).str.lower().str.strip()
-        st.sidebar.success("Database Loaded!")
-    else:
-        st.error("Excel must have 'Name' and 'Main POC Name' columns.")
-else:
-    st.info("Please upload your Excel file in the sidebar to begin.")
+# Extract list of names for rapid fuzzy matching
+invitee_names = df['Name'].astype(str).tolist()
 
-# 2. Camera Input
-img_file = st.camera_input("Scan Invitee Label")
+# 2. Define the Video Transformer for Continuous Scanning
+class OCRVideoTransformer(VideoTransformerBase):
+    def __init__(self):
+        self.last_poc = "Scanning..."
+        self.last_name = ""
 
-if img_file and uploaded_file:
-    # Process Image
-    img = Image.open(img_file)
-    img_np = np.array(img)
-    
-    with st.spinner('Scanning label...'):
-        # OCR Detection
-        results = reader.readtext(img_np)
+    def transform(self, frame):
+        # Convert video frame to numpy array
+        img = frame.to_ndarray(format="bgr24")
         
-        # Logic to pick the "Name"
-        # Usually, the name is the first or largest text block. 
-        # We will check each detected line against our database.
-        found_poc = None
-        detected_name = ""
-
-        for (bbox, text, prob) in results:
-            clean_text = text.lower().strip()
-            # Match check: See if detected text exists in our 'Name' column
-            match = df[df['Name_Clean'] == clean_text]
+        # Pre-process image for better OCR (grayscale)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Run Tesseract OCR
+        # --psm 6 assumes a single uniform block of text (good for labels)
+        custom_config = r'--oem 3 --psm 6'
+        text = pytesseract.image_to_string(gray, config=custom_config)
+        
+        # Process the text: split by newlines and remove empty lines
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        
+        # Check if we have at least 2 lines (to grab Line 2)
+        if len(lines) >= 2:
+            # Index 1 is Line 2 (0-indexed)
+            scanned_name = lines[1] 
             
-            if not match.empty:
-                found_poc = match['Main POC Name'].values[0]
-                detected_name = text
-                break
+            # Fuzzy match the scanned name against our Excel list
+            # Requires at least a 75% match to be considered valid
+            match = process.extractOne(scanned_name, invitee_names, scorer=fuzz.WRatio, score_cutoff=75)
+            
+            if match:
+                matched_name = match[0]
+                # Look up the POC for the matched name
+                poc_name = df.loc[df['Name'] == matched_name, 'Main POC Name'].values[0]
+                
+                self.last_name = matched_name
+                self.last_poc = f"POC: {poc_name}"
+            else:
+                self.last_poc = "No match found"
+        else:
+            self.last_poc = "Waiting for label..."
 
-    # 3. Display Result
-    if found_poc:
-        st.balloons()
-        st.markdown(f"### Found Invitee: **{detected_name}**")
-        st.markdown(f"## 📍 Stack with POC: ")
-        st.markdown(f"<h1 style='text-align: center; color: #ff4b4b; font-size: 80px;'>{found_poc}</h1>", unsafe_allow_html=True)
-    else:
-        st.warning("Could not find a matching name in the database. Try getting closer to the label.")
-        if results:
-            st.write("Detected text on label:", [res[1] for res in results])
+        # 3. Draw the result directly on the camera feed for fast sorting
+        # Create a background rectangle for text visibility
+        cv2.rectangle(img, (0, 0), (640, 100), (0, 0, 0), -1)
+        
+        # Put POC Name on the screen (Large Green Text)
+        cv2.putText(img, self.last_poc, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+        # Put the matched Invitee Name underneath (Smaller White Text)
+        cv2.putText(img, f"Found: {self.last_name}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        return img
+
+# 4. Initialize the WebRTC Streamer
+st.write("Grant camera permissions to start continuous scanning.")
+webrtc_streamer(
+    key="ocr-scanner",
+    video_transformer_factory=OCRVideoTransformer,
+    rtc_configuration={
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    }
+)
