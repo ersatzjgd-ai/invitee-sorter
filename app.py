@@ -112,4 +112,4 @@ if ctx.video_transformer:
                 final_name, original_text = res
                 poc = df.loc[df['Name'] == final_name, 'Main POC Name'].values[0]
                 st.markdown(f'<div class="poc-display">{poc}</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="invitee
+               st.markdown(f'<div class="invitee-label">Matched: {final_name}</div>', unsafe_allow_html=True)
