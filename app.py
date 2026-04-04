@@ -8,92 +8,88 @@ from rapidfuzz import process, fuzz
 
 st.set_page_config(page_title="Letter Sorter", layout="wide")
 
-# --- 1. Custom Styling for Speed ---
+# --- UI Styling ---
 st.markdown("""
     <style>
-    .poc-box {
-        background-color: #00C851;
+    .poc-display {
+        background-color: #28a745;
         color: white;
-        padding: 20px;
-        border-radius: 10px;
+        padding: 30px;
+        border-radius: 15px;
         text-align: center;
-        font-size: 40px;
+        font-size: 50px;
         font-weight: bold;
-        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    .name-box {
-        background-color: #33b5e5;
-        color: white;
-        padding: 10px;
-        border-radius: 5px;
+    .invitee-label {
+        color: #6c757d;
         text-align: center;
-        font-size: 20px;
+        font-size: 18px;
+        margin-top: 10px;
     }
     </style>
-    """, unsafe_index=True)
+    """, unsafe_allow_html=True)
 
-st.title("📇 Fast Capture POC Sorter")
+st.title("✉️ Invitee Sorter: Fast Capture")
 
-# --- 2. Excel Upload Section ---
-st.sidebar.header("Setup")
-uploaded_file = st.sidebar.file_uploader("Upload POC Excel Sheet", type=["xlsx"])
+# --- 1. Load Excel Data ---
+st.sidebar.header("Data Source")
+uploaded_file = st.sidebar.file_uploader("Upload POC Excel (Columns: Name, Main POC Name)", type=["xlsx"])
 
 @st.cache_data
 def load_data(file):
     try:
         df = pd.read_excel(file)
-        required_cols = ["Name", "Main POC Name"]
-        if not all(col in df.columns for col in required_cols):
-            st.error(f"Excel must have columns: {required_cols}")
-            return pd.DataFrame()
+        if not all(col in df.columns for col in ["Name", "Main POC Name"]):
+            st.error("Missing columns: 'Name' or 'Main POC Name'")
+            return None
         return df.dropna(subset=['Name'])
     except Exception as e:
-        st.error(f"Error reading Excel: {e}")
-        return pd.DataFrame()
+        st.error(f"Excel Error: {e}")
+        return None
 
-if uploaded_file:
-    df = load_data(uploaded_file)
-    invitee_names = df['Name'].astype(str).tolist()
-    st.sidebar.success(f"Loaded {len(df)} contacts.")
-else:
-    st.info("👈 Please upload your 'invitees.xlsx' file in the sidebar.")
+if not uploaded_file:
+    st.info("Please upload your Excel file in the sidebar to start sorting.")
     st.stop()
 
-# --- 3. Fast Picture Capture ---
-# This widget opens the native phone camera
-img_file = st.camera_input("Capture Label", label_visibility="hidden")
+df = load_data(uploaded_file)
+if df is None: st.stop()
+invitee_list = df['Name'].astype(str).tolist()
 
-if img_file:
-    # Convert the file to an opencv image
-    img = Image.open(img_file)
+# --- 2. Camera Input ---
+# This opens the native camera on your phone for a quick snap
+captured_image = st.camera_input("Scan the Label")
+
+if captured_image:
+    # Process Image
+    img = Image.open(captured_image)
     img_array = np.array(img)
     gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-
-    # Run OCR
-    custom_config = r'--oem 3 --psm 6'
-    text = pytesseract.image_to_string(gray, config=custom_config)
     
-    # Process lines
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    # OCR specifically looking for Line 2
+    # --psm 6 tells Tesseract to treat the image as a single block of text
+    custom_config = r'--oem 3 --psm 6'
+    raw_text = pytesseract.image_to_string(gray, config=custom_config)
+    
+    lines = [l.strip() for l in raw_text.split('\n') if l.strip()]
     
     if len(lines) >= 2:
-        scanned_name = lines[1] # Target Line 2
+        # TARGET: Line 2 as requested
+        detected_name = lines[1]
         
-        # Fuzzy match
-        match = process.extractOne(scanned_name, invitee_names, scorer=fuzz.WRatio, score_cutoff=70)
+        # Fuzzy match (minimum 70% match to prevent false positives)
+        match = process.extractOne(detected_name, invitee_list, scorer=fuzz.WRatio, score_cutoff=70)
         
         if match:
-            matched_name = match[0]
-            poc_name = df.loc[df['Name'] == matched_name, 'Main POC Name'].values[0]
+            final_name = match[0]
+            poc = df.loc[df['Name'] == final_name, 'Main POC Name'].values[0]
             
-            # --- 4. Large Visual Output ---
-            st.markdown(f'<div class="poc-box">{poc_name}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="name-box">Invitee: {matched_name}</div>', unsafe_allow_html=True)
-            
-            # Show a snippet of the image to confirm focus
-            st.image(img, caption="Last Scanned Label", width=300)
+            # --- 3. Result Display ---
+            st.markdown(f'<div class="poc-display">{poc}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="invitee-label">Detected: {final_name}</div>', unsafe_allow_html=True)
         else:
-            st.warning(f"Could not find a match for: '{scanned_name}'")
-            st.info("Try getting closer to the label or improving the light.")
+            st.warning(f"Could not match '{detected_name}' to any POC. Try re-snapping.")
     else:
-        st.error("OCR failed to detect multiple lines. Make sure the full label is in frame.")
+        st.error("Could not find Line 2 on the label. Ensure the label is centered and clear.")
+
+st.sidebar.write(f"Database contains **{len(df)}** invitees.")
