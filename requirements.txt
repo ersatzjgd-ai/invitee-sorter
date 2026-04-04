@@ -6,3 +6,4 @@ pytesseract
 rapidfuzz
 numpy
 Pillow
+streamlit-webrtc
