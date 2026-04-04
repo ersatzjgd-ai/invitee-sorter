@@ -19,8 +19,8 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("✉️ Dual-Line AI Sorter")
-st.write("Checking the first and second lines for invitee matches.")
+st.title("Letter Sorter")
+st.write("Scan the letter sticker with your mobile camera")
 
 # --- 1. Data Loading ---
 st.sidebar.header("📁 Data Source")
