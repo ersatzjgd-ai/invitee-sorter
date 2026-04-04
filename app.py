@@ -1,30 +1,30 @@
 import streamlit as st
 import pandas as pd
-import cv2
-import pytesseract
 import numpy as np
 from PIL import Image
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+import easyocr
 from rapidfuzz import process, fuzz
 
 # --- UI Styling ---
-st.set_page_config(page_title="Pro Letter Sorter", layout="wide")
+st.set_page_config(page_title="Letter Sorter for POCs", layout="centered")
+
 st.markdown("""
     <style>
-    .poc-display {
-        background-color: #007bff; color: white; padding: 30px;
-        border-radius: 15px; text-align: center; font-size: 55px;
-        font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    .big-poc-card {
+        background-color: #198754; color: white; padding: 40px 20px;
+        border-radius: 12px; text-align: center; font-size: 48px;
+        font-weight: 900; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 10px;
     }
-    .invitee-label { color: #6c757d; text-align: center; font-size: 20px; margin-top: 10px; }
+    .match-text { color: #495057; font-size: 18px; text-align: center; font-weight: 500; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("📸 Pro Sorter: High-Quality OCR")
+st.title("OCR Letter Sorter")
+st.write("Scan the letter sticker with the app.")
 
-# --- 1. Data Loading ---
-st.sidebar.header("Setup")
-uploaded_file = st.sidebar.file_uploader("Upload POC List", type=["xlsx", "csv"])
+# --- 1. Load Data ---
+st.sidebar.header("📁 Data Source")
+uploaded_file = st.sidebar.file_uploader("Upload POC List (CSV/Excel)", type=["xlsx", "csv"])
 
 @st.cache_data
 def load_data(file):
@@ -32,86 +32,73 @@ def load_data(file):
         df = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
         return df.dropna(subset=['Name'])
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error loading file: {e}")
         return None
 
 if not uploaded_file:
-    st.info("Upload your list to start.")
+    st.info("👈 Please upload your contact list to activate the camera.")
     st.stop()
 
 df = load_data(uploaded_file)
+if df is None: st.stop()
 invitee_list = df['Name'].astype(str).tolist()
 
-# --- 2. Flash & Camera Controls ---
-st.sidebar.subheader("Camera Settings")
-use_flash = st.sidebar.checkbox("Turn Flash (Torch) On")
+# --- 2. Load EasyOCR Model ---
+# We use @st.cache_resource so the heavy AI model only loads once, making subsequent scans fast.
+@st.cache_resource
+def load_ocr():
+    return easyocr.Reader(['en']) # 'en' stands for English
 
-# --- 3. Image Processing for High Quality ---
-def improve_image(img):
-    # Convert to gray
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Bilateral Filter: Removes noise but keeps edges (letters) sharp
-    gray = cv2.bilateralFilter(gray, 9, 75, 75)
-    
-    # Adaptive Thresholding: Handles uneven lighting/shadows on the letter
-    gray = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                 cv2.THRESH_BINARY, 11, 2)
-    
-    # 2x Zoom for OCR clarity
-    height, width = gray.shape
-    gray = cv2.resize(gray, (width * 2, height * 2), interpolation=cv2.INTER_CUBIC)
-    return gray
+reader = load_ocr()
 
-# --- 4. The OCR Engine ---
-def scan_for_name(img):
-    processed = improve_image(img)
-    # PSM 4: Assume a single column of text of variable sizes
-    custom_config = r'--oem 3 --psm 4'
-    raw_text = pytesseract.image_to_string(processed, config=custom_config)
-    
-    lines = [l.strip() for l in raw_text.split('\n') if len(l.strip()) > 3]
-    
-    best_match = None
-    highest_score = 0
+# --- 3. Camera Capture & Processing ---
+st.markdown("### 📸 Scan Label")
+captured_image = st.camera_input("Take a picture", label_visibility="collapsed")
 
-    for line in lines:
-        # We use Token Set Ratio to ignore "Ms." or "Ji" and find the core name
-        match = process.extractOne(line, invitee_list, scorer=fuzz.token_set_ratio)
-        if match and match[1] > 70:
-            if match[1] > highest_score:
-                highest_score = match[1]
-                best_match = (match[0], line)
-    return best_match
+st.markdown("---") 
 
-# --- 5. High-Resolution Capture ---
-# We use WebRTC for the torch toggle, but process frames individually
-ctx = webrtc_streamer(
-    key="pro-scanner",
-    mode=WebRtcMode.SENDRECV,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    media_stream_constraints={
-        "video": {
-            "facingMode": "environment", # Use back camera
-            "width": {"ideal": 1280},    # High resolution
-            "height": {"ideal": 720},
-            "torch": use_flash           # Attempt to turn on Flash
-        },
-        "audio": False,
-    },
-)
+if captured_image:
+    with st.spinner("AI is analyzing the label..."):
+        img = Image.open(captured_image)
+        img_array = np.array(img)
+        
+        # EasyOCR reads directly from the array. No need for OpenCV thresholding!
+        # It returns a list of tuples: (bounding_box, text, confidence_score)
+        results = reader.readtext(img_array)
+        
+        # Extract the text from the results, ignoring low-confidence guesses or tiny artifacts
+        lines = [res[1].strip() for res in results if res[2] > 0.25 and len(res[1].strip()) > 3]
+        
+        match_found = False
+        best_match = None
+        highest_score = 0
 
-if ctx.video_transformer:
-    # Button to trigger a high-quality capture from the live stream
-    if st.button("📸 SCAN NOW"):
-        # Note: In webrtc, we capture the current frame
-        frame = ctx.video_transformer.last_frame 
-        if frame is not None:
-            res = scan_for_name(frame)
-            if res:
-                final_name, original_text = res
-                poc = df.loc[df['Name'] == final_name, 'Main POC Name'].values[0]
-                st.markdown(f'<div class="poc-display">{poc}</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="invitee-label">Matched: {final_name}</div>', unsafe_allow_html=True)
-            else:
-                st.error("No name found. Adjust focus and try again.")
+        # Scan detected lines for the best name match
+        for line in lines:
+            match = process.extractOne(line, invitee_list, scorer=fuzz.token_set_ratio)
+            if match and match[1] > 75: 
+                if match[1] > highest_score:
+                    highest_score = match[1]
+                    best_match = (match[0], line)
+
+        # --- 4. Results Display ---
+        if best_match:
+            final_name, original_text = best_match
+            poc = df.loc[df['Name'] == final_name, 'Main POC Name'].values[0]
+            
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.markdown(f'<div class="big-poc-card">{poc}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="match-text">Verified Match: <b>{final_name}</b></div>', unsafe_allow_html=True)
+            with col2:
+                st.success("Match Found!")
+                st.caption(f"Camera read: '{original_text}'")
+                st.caption(f"Confidence: {highest_score}%")
+                
+        else:
+            st.error("⚠️ Could not match any text to your POC list.")
+            with st.expander("Diagnostic: What the AI saw"):
+                if lines:
+                    st.write("Detected text:", lines)
+                else:
+                    st.write("No clear text detected. Try adjusting the distance.")
