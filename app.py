@@ -7,7 +7,7 @@ from rapidfuzz import process, fuzz
 import re
 
 # --- UI Styling ---
-st.set_page_config(page_title="AI Letter Sorter", layout="centered")
+st.set_page_config(page_title="Letter Sorter", layout="centered")
 
 st.markdown("""
     <style>
@@ -20,11 +20,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("Ai Letter Sorter")
-st.write("Scan the letterhead to match it with it's POC. In your file, make sure that the invitee names are under the column 'Name'and the POCs areunder the column 'Main POC Name'")
+st.title("Sort letters for POCs")
+st.write("Scan the letterhead to match it with its POC. In your file, make sure that the invitee names are under the column 'Name'and the POCs areunder the column 'Main POC Name'")
 
 # --- 1. Data Loading ---
-st.sidebar.header("📁 Data Source")
+st.sidebar.header("Data Source")
 uploaded_file = st.sidebar.file_uploader("Upload POC List (CSV/Excel)", type=["xlsx", "csv"])
 
 @st.cache_data
