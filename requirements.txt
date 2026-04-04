@@ -3,6 +3,6 @@ pandas
 openpyxl
 opencv-python-headless
 pytesseract
-streamlit-webrtc
 rapidfuzz
 numpy
+Pillow
