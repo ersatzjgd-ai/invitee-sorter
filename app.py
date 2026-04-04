@@ -6,7 +6,7 @@ import easyocr
 from rapidfuzz import process, fuzz
 
 # --- UI Styling ---
-st.set_page_config(page_title="AI Letter Sorter", layout="centered")
+st.set_page_config(page_title="Letter Sorter", layout="centered")
 
 st.markdown("""
     <style>
