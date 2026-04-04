@@ -21,8 +21,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 st.title("Ai Letter Sorter")
-st.write("Scan the letterhead to match it with it's POC.
-In your file, make sure that the invitee names are under the column 'Name'and the POCs areunder the column 'Main POC Name'")
+st.write("Scan the letterhead to match it with it's POC. In your file, make sure that the invitee names are under the column 'Name'and the POCs areunder the column 'Main POC Name'")
 
 # --- 1. Data Loading ---
 st.sidebar.header("📁 Data Source")
